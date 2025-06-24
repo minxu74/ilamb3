@@ -1,3 +1,4 @@
+import itertools
 from itertools import chain
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
+from tqdm import tqdm
 
 import ilamb3.compare as cmp
 import ilamb3.dataset as dset
@@ -104,7 +106,6 @@ def generate_titles(qname: str) -> str:
             tokens.pop(2)
         ]
     title = " ".join(tokens)
-    print(f"{qname:30} | {title}")
     return title
 
 
@@ -315,79 +316,93 @@ class hydro_analysis(ILAMBAnalysis):
 
         # Plot the maps, saving if requested on the fly
         axs = []
-        logger.info("Plotting maps...")
-        for plot in plots:
-            for source, ds in com.items():
-                if plot not in ds:
-                    continue
-                if not dset.is_spatial(ds[plot]):
-                    continue
-                for region in self.regions:
-                    row = {
-                        "name": plot,
-                        "title": df.loc[plot, "title"],
-                        "region": region,
-                        "source": source,
-                        "analysis": self._get_analysis_section(plot),
-                    }
-                    ax = plt.plot_map(
-                        ds[plot],
-                        region=region,
-                        vmin=df.loc[plot, "low"],
-                        vmax=df.loc[plot, "high"],
-                        cmap=df.loc[plot, "cmap"],
-                        title=source + " " + df.loc[plot, "title"],
-                    )
-                    if self.output_path is None:
-                        row["axis"] = ax
-                    else:
-                        row["axis"] = False
-                        fig = ax.get_figure()
-                        fig.savefig(
-                            self.output_path
-                            / f"{row['source']}_{row['region']}_{row['name']}.png"
-                        )
-                        mpl.close(fig)
-                    axs.append(row)
+        map_plots = [
+            (plot, source, region)
+            for plot, source, region in itertools.product(plots, com, self.regions)
+            if plot in com[source] and dset.is_spatial(com[source][plot])
+        ]
+        for plot, source, region in tqdm(
+            map_plots,
+            desc="Plotting maps",
+            unit="plot",
+            bar_format="{desc:>20}: {percentage:3.0f}%|{bar}|{n_fmt}/{total_fmt} [{rate_fmt:>15s}{postfix}]",
+            total=len(map_plots),
+        ):
+            filename = self.output_path / f"{source}_{region}_{plot}.png"
+            row = {
+                "name": plot,
+                "title": df.loc[plot, "title"],
+                "region": region,
+                "source": source,
+                "analysis": self._get_analysis_section(plot),
+                "axis": False,
+            }
+            if filename.is_file():
+                axs.append(row)
+                continue
+            ax = plt.plot_map(
+                com[source][plot],
+                region=region,
+                vmin=df.loc[plot, "low"],
+                vmax=df.loc[plot, "high"],
+                cmap=df.loc[plot, "cmap"],
+                title=source + " " + df.loc[plot, "title"],
+            )
+            if self.output_path is None:
+                row["axis"] = ax
+                axs.append(row)
+                continue
+            fig = ax.get_figure()
+            fig.savefig(
+                self.output_path / f"{row['source']}_{row['region']}_{row['name']}.png"
+            )
+            mpl.close(fig)
+            axs.append(row)
 
         # Plot the curves, saving if requested on the fly
-        logger.info("Plotting curves...")
-        for plot in [f"mean_{region}" for region in self.regions]:
-            region = plot.split("_")[-1]
-            for source, ds in com.items():
-                if source == "Reference":
-                    continue
-                if plot not in ds:
-                    continue
-                if not dset.is_temporal(ds[plot]):
-                    continue
-                row = {
-                    "name": "mean",
-                    "title": "Regional Mean",
-                    "region": region,
-                    "source": source,
-                    "analysis": "Annual",
-                }
-                ax = plt.plot_curve(
-                    {source: ds} | {"Reference": ref},
-                    plot,
-                    vmin=df.loc[plot, "low"]
-                    - 0.05 * (df.loc[plot, "high"] - df.loc[plot, "low"]),
-                    vmax=df.loc[plot, "high"]
-                    + 0.05 * (df.loc[plot, "high"] - df.loc[plot, "low"]),
-                    title=f"{source} Regional Mean",
-                )
-                if self.output_path is None:
-                    row["axis"] = ax
-                    continue
-                else:
-                    row["axis"] = False
-                    fig = ax.get_figure()
-                    fig.savefig(
-                        self.output_path
-                        / f"{row['source']}_{row['region']}_{row['name']}.png"
-                    )
-                    mpl.close(fig)
+        curve_plots = [
+            (region, source)
+            for region, source in itertools.product(self.regions, com)
+            if source != "Reference"
+            and f"mean_{region}" in com[source]
+            and dset.is_temporal(com[source][f"mean_{region}"])
+        ]
+        for region, source in tqdm(
+            curve_plots,
+            desc="Plotting curves",
+            unit="plot",
+            bar_format="{desc:>20}: {percentage:3.0f}%|{bar}|{n_fmt}/{total_fmt} [{rate_fmt:>15s}{postfix}]",
+            total=len(curve_plots),
+        ):
+            plot = f"mean_{region}"
+            filename = self.output_path / f"{source}_{region}_mean.png"
+            row = {
+                "name": "mean",
+                "title": "Regional Mean",
+                "region": region,
+                "source": source,
+                "analysis": "Annual",
+                "axis": False,
+            }
+            if filename.is_file():
                 axs.append(row)
+                continue
+            ax = plt.plot_curve(
+                {source: com[source]} | {"Reference": ref},
+                plot,
+                vmin=df.loc[plot, "low"]
+                - 0.05 * (df.loc[plot, "high"] - df.loc[plot, "low"]),
+                vmax=df.loc[plot, "high"]
+                + 0.05 * (df.loc[plot, "high"] - df.loc[plot, "low"]),
+                title=f"{source} Regional Mean",
+            )
+            if self.output_path is None:
+                row["axis"] = ax
+                axs.append(row)
+                continue
+            fig = ax.get_figure()
+            fig.savefig(filename)
+            mpl.close(fig)
+            axs.append(row)
         axs = pd.DataFrame(axs).dropna(subset=["axis"])
         return axs
