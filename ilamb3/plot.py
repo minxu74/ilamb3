@@ -185,7 +185,7 @@ def plot_curve(dsd: dict[str, xr.Dataset], varname: str, **kwargs):
     dad = {
         source: (
             ds[varname].convert_calendar("noleap")
-            if "time" in ds[varname]
+            if dset.is_temporal(ds[varname])
             else ds[varname]
         )
         for source, ds in dsd.items()
