@@ -90,14 +90,11 @@ def dataframe_to_cmec(df: pd.DataFrame) -> dict[str, Any]:
                     ]
                     if not len(q):
                         continue
-                    q.groupby("name").mean(numeric_only=True)
-                    q = (
-                        q[["name", "dataset", "value"]]
-                        .pivot(columns="name", index="dataset")
-                        .mean()
-                    )
-                    q.index = [i.replace(" [1]", "") for i in q.index.levels[1]]
-                    cmec_results[region][model][name] = q.to_dict()
+                    q = q.groupby("name").mean(numeric_only=True).to_dict()
+                    cmec_results[region][model][name] = {
+                        metric.replace(" [1]", ""): value
+                        for metric, value in q["value"].items()
+                    }
 
     bundle = {
         "SCHEMA": {"name": "CMEC", "version": "v1", "package": "ILAMB"},
