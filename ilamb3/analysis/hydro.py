@@ -1,5 +1,6 @@
 import itertools
 from itertools import chain
+from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ import ilamb3.compare as cmp
 import ilamb3.dataset as dset
 import ilamb3.plot as plt
 from ilamb3.analysis.base import ILAMBAnalysis, scalarify
+
+NUM_PLOTTING_THREADS = 8
 
 
 def metric_maps(
@@ -296,8 +299,6 @@ class hydro_analysis(ILAMBAnalysis):
         ref: xr.Dataset,
         com: dict[str, xr.Dataset],
     ) -> pd.DataFrame:
-        com["Reference"] = ref
-
         def _choose_cmap(plot_name):
             if "score" in plot_name:
                 return "plasma"
@@ -305,29 +306,8 @@ class hydro_analysis(ILAMBAnalysis):
                 return "bwr"
             return "viridis"
 
-        # Which plots are we handling in here? I am building this list from a
-        # section layout I created in the constructor.
-        plots = list(chain(*[vs for _, vs in self.sections.items()]))
-
-        # Setup plots
-        df = plt.determine_plot_limits(com, symmetrize=["difference"]).set_index("name")
-        df["title"] = [generate_titles(plot) for plot in df.index]
-        df["cmap"] = df.index.map(_choose_cmap)
-
-        # Plot the maps, saving if requested on the fly
-        axs = []
-        map_plots = [
-            (plot, source, region)
-            for plot, source, region in itertools.product(plots, com, self.regions)
-            if plot in com[source] and dset.is_spatial(com[source][plot])
-        ]
-        for plot, source, region in tqdm(
-            map_plots,
-            desc="Plotting maps",
-            unit="plot",
-            bar_format="{desc:>20}: {percentage:3.0f}%|{bar}|{n_fmt}/{total_fmt} [{rate_fmt:>15s}{postfix}]",
-            total=len(map_plots),
-        ):
+        def _plot_map(inputs) -> dict[str, str]:
+            plot, source, region = inputs
             filename = self.output_path / f"{source}_{region}_{plot}.png"
             row = {
                 "name": plot,
@@ -338,8 +318,7 @@ class hydro_analysis(ILAMBAnalysis):
                 "axis": False,
             }
             if filename.is_file():
-                axs.append(row)
-                continue
+                return row
             ax = plt.plot_map(
                 com[source][plot],
                 region=region,
@@ -350,30 +329,16 @@ class hydro_analysis(ILAMBAnalysis):
             )
             if self.output_path is None:
                 row["axis"] = ax
-                axs.append(row)
-                continue
+                return row
             fig = ax.get_figure()
             fig.savefig(
                 self.output_path / f"{row['source']}_{row['region']}_{row['name']}.png"
             )
             mpl.close(fig)
-            axs.append(row)
+            return row
 
-        # Plot the curves, saving if requested on the fly
-        curve_plots = [
-            (region, source)
-            for region, source in itertools.product(self.regions, com)
-            if source != "Reference"
-            and f"mean_{region}" in com[source]
-            and dset.is_temporal(com[source][f"mean_{region}"])
-        ]
-        for region, source in tqdm(
-            curve_plots,
-            desc="Plotting curves",
-            unit="plot",
-            bar_format="{desc:>20}: {percentage:3.0f}%|{bar}|{n_fmt}/{total_fmt} [{rate_fmt:>15s}{postfix}]",
-            total=len(curve_plots),
-        ):
+        def _plot_curve(inputs) -> dict[str, str]:
+            region, source = inputs
             plot = f"mean_{region}"
             filename = self.output_path / f"{source}_{region}_mean.png"
             row = {
@@ -385,8 +350,7 @@ class hydro_analysis(ILAMBAnalysis):
                 "axis": False,
             }
             if filename.is_file():
-                axs.append(row)
-                continue
+                return row
             ax = plt.plot_curve(
                 {source: com[source]} | {"Reference": ref},
                 plot,
@@ -398,11 +362,60 @@ class hydro_analysis(ILAMBAnalysis):
             )
             if self.output_path is None:
                 row["axis"] = ax
-                axs.append(row)
-                continue
+                return row
             fig = ax.get_figure()
             fig.savefig(filename)
             mpl.close(fig)
-            axs.append(row)
+            return row
+
+        # Add the reference to the dictionary
+        com["Reference"] = ref
+
+        # Which plots are we handling in here? I am building this list from a
+        # section layout I created in the constructor.
+        plots = list(chain(*[vs for _, vs in self.sections.items()]))
+
+        # Setup plots
+        df = plt.determine_plot_limits(com, symmetrize=["difference"]).set_index("name")
+        df["title"] = [generate_titles(plot) for plot in df.index]
+        df["cmap"] = df.index.map(_choose_cmap)
+
+        # Plot the maps, saving if requested on the fly
+        map_args = [
+            (plot, source, region)
+            for plot, source, region in itertools.product(plots, com, self.regions)
+            if plot in com[source] and dset.is_spatial(com[source][plot])
+        ]
+        map_plots = ThreadPool(NUM_PLOTTING_THREADS).imap_unordered(_plot_map, map_args)
+        axs = list(
+            tqdm(
+                map_plots,
+                desc="Plotting maps",
+                unit="plot",
+                bar_format="{desc:>20}: {percentage:3.0f}%|{bar}|{n_fmt}/{total_fmt} [{rate_fmt:>15s}{postfix}]",
+                total=len(map_args),
+            )
+        )
+
+        # Plot the curves, saving if requested on the fly
+        curve_args = [
+            (region, source)
+            for region, source in itertools.product(self.regions, com)
+            if source != "Reference"
+            and f"mean_{region}" in com[source]
+            and dset.is_temporal(com[source][f"mean_{region}"])
+        ]
+        curve_plots = ThreadPool(NUM_PLOTTING_THREADS).imap_unordered(
+            _plot_curve, curve_args
+        )
+        axs += list(
+            tqdm(
+                curve_plots,
+                desc="Plotting curves",
+                unit="plot",
+                bar_format="{desc:>20}: {percentage:3.0f}%|{bar}|{n_fmt}/{total_fmt} [{rate_fmt:>15s}{postfix}]",
+                total=len(curve_args),
+            )
+        )
         axs = pd.DataFrame(axs).dropna(subset=["axis"])
         return axs
