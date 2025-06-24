@@ -492,8 +492,6 @@ def run_single_block(
 
         # Pop log and remove zero size files
         logger.remove(log_id)
-        if log_file.stat().st_size == 0:  # pragma: no cover
-            log_file.unlink()
 
     # Check that the reference intermediate data really was generated.
     if ds_ref is None:
@@ -502,12 +500,19 @@ def run_single_block(
         )  # pragma: no cover
 
     # Phase 2: get plots and combine scalars and save
+    log_file = output_path / "post.log"
+    log_id = logger.add(log_file, backtrace=True, diagnose=True)
+
     plt.rcParams.update({"figure.max_open_warning": 0})
     df = pd.concat(df_all).drop_duplicates(
         subset=["source", "region", "analysis", "name"]
     )
     df = add_overall_score(df)
-    df_plots = plot_analyses(df, ds_ref, ds_com, analyses, output_path)
+
+    try:
+        df_plots = plot_analyses(df, ds_ref, ds_com, analyses, output_path)
+    except Exception:
+        logger.exception(f"ILAMB analysis '{block_name}' failed in post-processing.")
 
     # Generate an output page
     if ilamb3.conf["debug_mode"] and (output_path / "index.html").is_file():
@@ -516,6 +521,8 @@ def run_single_block(
     html = generate_html_page(df, ds_ref, ds_com, df_plots)
     with open(output_path / "index.html", mode="w") as out:
         out.write(html)
+
+    logger.remove(log_id)
 
 
 def run_analyses(
