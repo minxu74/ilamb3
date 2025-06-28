@@ -443,7 +443,7 @@ def run_single_block(
             [grp.iloc[0][f] for f in ilamb3.conf["model_name_facets"]]
         )
         csv_file = output_path / f"{source_name}.csv"
-        ref_file = output_path / "Reference.nc"
+        ref_file = output_path / f"Reference_{source_name}.nc"
         com_file = output_path / f"{source_name}.nc"
         log_file = output_path / f"{source_name}.log"
         log_id = logger.add(log_file, backtrace=True, diagnose=True)
@@ -515,10 +515,17 @@ def run_single_block(
         logger.exception(f"ILAMB analysis '{block_name}' failed in post-processing.")
 
     # Generate an output page
+
     if ilamb3.conf["debug_mode"] and (output_path / "index.html").is_file():
         return
+
+    if ilamb3.conf["skip_html"]:
+        return
     ds_ref.attrs["header"] = block_name
-    html = generate_html_page(df, ds_ref, ds_com, df_plots)
+    try:
+        html = generate_html_page(df, ds_ref, ds_com, df_plots, output_path)
+    except Exception as e:
+        print (f"hmtl error {e}")
     with open(output_path / "index.html", mode="w") as out:
         out.write(html)
 
@@ -639,6 +646,7 @@ def generate_html_page(
     ref: xr.Dataset,
     com: dict[str, xr.Dataset],
     df_plots: pd.DataFrame,
+    output_path: Path,
 ) -> str:
     """
     Generate an html page encoding all analysis data.
@@ -662,18 +670,53 @@ def generate_html_page(
     ilamb_regions = ilr.Regions()
     # Setup template analyses and plots
     analyses = {analysis: {} for analysis in df["analysis"].dropna().unique()}
-    for (aname, pname), df_grp in df_plots.groupby(["analysis", "name"], sort=False):
-        analyses[aname][pname] = []
-        if len(df_grp["source"].unique()) == 1 and None in df_grp["source"].unique():
-            analyses[aname][pname] += [{"None": f"None_RNAME_{pname}.png"}]
-            continue
-        if "Reference" in df_grp["source"].unique():
-            analyses[aname][pname] += [{"Reference": f"Reference_RNAME_{pname}.png"}]
-        analyses[aname][pname] += [{"Model": f"MNAME_RNAME_{pname}.png"}]
-    ref_plots = list(df_plots[df_plots["source"] == "Reference"]["name"].unique())
-    mod_plots = list(
-        df_plots[~df_plots["source"].isin(["Reference", None])]["name"].unique()
-    )
+
+    if len(df_plots) > 0:
+        for (aname, pname), df_grp in df_plots.groupby(["analysis", "name"], sort=False):
+            analyses[aname][pname] = []
+            if len(df_grp["source"].unique()) == 1 and None in df_grp["source"].unique():
+                analyses[aname][pname] += [{"None": f"None_RNAME_{pname}.png"}]
+                continue
+            if "Reference" in df_grp["source"].unique():
+                analyses[aname][pname] += [{"Reference": f"Reference_RNAME_{pname}.png"}]
+            analyses[aname][pname] += [{"Model": f"MNAME_RNAME_{pname}.png"}]
+        ref_plots = list(df_plots[df_plots["source"] == "Reference"]["name"].unique())
+        mod_plots = list(
+            df_plots[~df_plots["source"].isin(["Reference", None])]["name"].unique()
+        )
+    else:
+        import re
+
+        print("harvesting results")
+        ref_plots = set()
+        reg_codes = set()
+
+        model_names = set()  # Strings between RXX_ and .png
+        mod_plots = set()      # Strings from start to RXX/conus
+
+        ref_pattern = re.compile(r'Reference_(R\d{2}|conus)_(.*?)\.png')
+
+        mod_pattern = re.compile(r'_(R\d{2}|conus)_(.*?)\.png')
+        pre_pattern = re.compile(r'(.*?)_(R\d{2}|conus)_')
+
+        build_dir=pathlib.Path("_build")
+
+        for dirpath, _, files in build_dir.walk():
+            if len(files) > 0:
+                for filename in files:
+                    if filename.startswith('Reference') and filename.endswith('.png'):
+                        match = ref_pattern.search(filename)
+                        if match:
+                            ref_plots.add(match.group(2))
+                            reg_codes.add(match.group(1))
+                    if filename.endswith('.png') and not filename.startswith('Reference'):
+                        mod_match = mod_pattern.search(filename)
+                        pre_match = pre_pattern.search(filename)
+                        if mod_match:
+                            mod_plots.add(mod_match.group(2))
+                        if pre_match:
+                            model_names.add(pre_match.group(1))
+
     all_plots = sorted(list(set(ref_plots) | set(mod_plots)))
     if not all_plots:
         all_plots = [""]

@@ -14,9 +14,13 @@ from tqdm import tqdm
 import ilamb3.compare as cmp
 import ilamb3.dataset as dset
 import ilamb3.plot as plt
+import ilamb3
 from ilamb3.analysis.base import ILAMBAnalysis, scalarify
 
-NUM_PLOTTING_THREADS = 8
+import pint
+ureg = pint.UnitRegistry()
+
+NUM_PLOTTING_THREADS = 1
 
 
 def metric_maps(
@@ -306,6 +310,30 @@ class hydro_analysis(ILAMBAnalysis):
                 return "bwr"
             return "viridis"
 
+        def _hack_source(source: str) -> str:
+
+            #mxu hack source
+            if source != "Reference":
+                parts = source.split('_')
+                if len(parts) == 1:
+                    return f"{parts[0]} (GCM)"
+                else:
+                    main_model = parts[0]
+                    downscaled = ' '.join(parts[1:])
+                    return f"{main_model} ({downscaled})"
+            else:
+                return self.output_path.name
+
+        def _hack_ylabel(name:str, units:str) -> str:
+
+            xunit = ureg(units)
+            if isinstance(xunit, int):
+                vunit = str(xunit)
+                return f"{name} [{vunit}]"
+            else:
+                vunit = xunit.units
+                return f"{name} [{vunit:~}]"
+
         def _plot_map(inputs) -> dict[str, str]:
             plot, source, region = inputs
             filename = self.output_path / f"{source}_{region}_{plot}.png"
@@ -317,15 +345,21 @@ class hydro_analysis(ILAMBAnalysis):
                 "analysis": self._get_analysis_section(plot),
                 "axis": False,
             }
-            if filename.is_file():
+
+            if filename.is_file() and ilamb3.conf["use_cached_plots"]:
+            #if filename.is_file():
                 return row
+
+            xsource = _hack_source(source)
+
             ax = plt.plot_map(
                 com[source][plot],
                 region=region,
                 vmin=df.loc[plot, "low"],
                 vmax=df.loc[plot, "high"],
                 cmap=df.loc[plot, "cmap"],
-                title=source + " " + df.loc[plot, "title"],
+                #-xum title=source + " " + df.loc[plot, "title"],
+                title=xsource + " " + df.loc[plot, "title"],
             )
             if self.output_path is None:
                 row["axis"] = ax
@@ -349,8 +383,12 @@ class hydro_analysis(ILAMBAnalysis):
                 "analysis": "Annual",
                 "axis": False,
             }
-            if filename.is_file():
+            if filename.is_file() and ilamb3.conf["use_cached_plots"]:
                 return row
+
+            xsource = _hack_source(source)
+            ylabel = _hack_ylabel(ref[plot].attrs["long_name"], ref[plot].attrs["units"])
+
             ax = plt.plot_curve(
                 {source: com[source]} | {"Reference": ref},
                 plot,
@@ -358,7 +396,10 @@ class hydro_analysis(ILAMBAnalysis):
                 - 0.05 * (df.loc[plot, "high"] - df.loc[plot, "low"]),
                 vmax=df.loc[plot, "high"]
                 + 0.05 * (df.loc[plot, "high"] - df.loc[plot, "low"]),
-                title=f"{source} Regional Mean",
+                title=f"{xsource} Regional Mean",
+                ylabel = ylabel,
+                xsource = xsource,
+                ref_label = self.output_path.name,
             )
             if self.output_path is None:
                 row["axis"] = ax

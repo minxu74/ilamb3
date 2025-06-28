@@ -11,6 +11,8 @@ import ilamb3
 import ilamb3.dataset as dset
 from ilamb3.regions import Regions
 
+import pint
+ureg = pint.UnitRegistry()
 
 def get_extents(da: xr.DataArray) -> list[float]:
     """Find the extent of the non-null data."""
@@ -128,7 +130,16 @@ def plot_map(da: xr.DataArray, **kwargs):
     )
 
     # Setup colorbar arguments
-    cba = {"label": da.attrs["units"]}
+
+    
+    xunit = ureg(da.attrs["units"])
+    if isinstance(xunit, int):
+        vunit = str(xunit)
+        cba = {"label": f"{vunit}"}
+    else:
+        vunit = xunit.units
+        cba = {"label": f"{vunit:~}"}
+    #cba = {"label": da.attrs["units"]}
     if "cbar_kwargs" in kwargs:
         cba.update(kwargs.pop("cbar_kwargs"))
 
@@ -170,7 +181,10 @@ def plot_curve(dsd: dict[str, xr.Dataset], varname: str, **kwargs):
     vmax = kwargs.pop("vmax") if "vmax" in kwargs else None
     xticks = kwargs.pop("xticks") if "xticks" in kwargs else None
     xticklabels = kwargs.pop("xticklabels") if "xticklabels" in kwargs else None
+    ylabel = kwargs.pop("ylabel") if "ylabel" in kwargs else None
     title = kwargs.pop("title") if "title" in kwargs else ""
+    xsource = kwargs.pop("xsource") if "xsource" in kwargs else ""
+    ref_label = kwargs.pop("ref_label") if "ref_label" in kwargs else ""
 
     # Setup figure
     ASPECT = 1.618
@@ -193,9 +207,16 @@ def plot_curve(dsd: dict[str, xr.Dataset], varname: str, **kwargs):
     ref = dad.pop("Reference")
 
     # Plot curves
-    ref.plot(ax=ax, color="k", label="Reference")
+    if ref_label:
+        ref.plot(ax=ax, color="k", label=ref_label)
+    else:
+        ref.plot(ax=ax, color="k", label="Reference")
+
     for source, da in dad.items():
-        da.plot(ax=ax, color=get_model_color(source), label=source)
+        if xsource:
+            da.plot(ax=ax, color=get_model_color(source), label=xsource)
+        else:
+            da.plot(ax=ax, color=get_model_color(source), label=source)
 
     ax.legend()
     ax.set_title(title)
@@ -203,6 +224,8 @@ def plot_curve(dsd: dict[str, xr.Dataset], varname: str, **kwargs):
         ax.set_xticks(xticks)
     if xticklabels is not None:
         ax.set_xticklabels(xticklabels)
+    if ylabel:
+        ax.set_ylabel(ylabel)
     if vmin is not None and vmax is not None:
         ax.set_ylim(vmin, vmax)
     return ax

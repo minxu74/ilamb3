@@ -21,6 +21,8 @@ defaults = {
     "figure_dpi": 100,
     "debug_mode": False,
     "run_mode": "interactive",  # for internal use
+    "skip_html": False, # for simple parallel
+    "use_cached_plots": False, # for simple parallel
 }
 
 
@@ -72,6 +74,8 @@ class Config(dict):
         use_cached_results: bool | None = None,
         figure_dpi: int | None = None,
         debug_mode: bool | None = None,
+        skip_html: bool | None = None,
+        use_cached_plots: bool | None = None,
     ):
         """Change ilamb3 configuration options."""
         temp = copy.deepcopy(self)
@@ -101,6 +105,10 @@ class Config(dict):
             self["figure_dpi"] = int(figure_dpi)
         if debug_mode is not None:
             self["debug_mode"] = bool(debug_mode)
+        if skip_html is not None:
+            self["skip_html"] = bool(skip_html)
+        if use_cached_plots is not None:
+            self["use_cached_plots"] = bool(use_cached_plots)
         return self._unset(temp)
 
     def __getitem__(self, item):
